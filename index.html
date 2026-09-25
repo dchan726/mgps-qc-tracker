@@ -1,0 +1,1991 @@
+<script>window.VERCEL_ENV_VARS={"FIREBASE_API_KEY":"AIzaSyAf2mNwfr0ADNZWyzobfBpc27vuUw8o6rg","FIREBASE_AUTH_DOMAIN":"mgps-qc-tracker.firebaseapp.com","FIREBASE_PROJECT_ID":"mgps-qc-tracker","FIREBASE_STORAGE_BUCKET":"mgps-qc-tracker.firebasestorage.app","FIREBASE_MESSAGING_SENDER_ID":"1688135676","FIREBASE_APP_ID":"1:1688135676:web:00d747d9c594dc5bcb3479"};</script>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MGPS 醫療氣體終端組件 (TU) 檢測與進度管理系統</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- React & React DOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Babel for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- PDF.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  </script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;600;700&display=swap');
+    body {
+      font-family: 'Noto Sans TC', sans-serif;
+      background-color: #f8fafc;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 3px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fadeIn {
+      animation: fadeIn 0.2s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col">
+  <div id="root"></div>
+
+  <!-- Firebase Script Import (ES Module setup mapped to global window object) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // =========================================================================
+    // ⚙️ 自訂 Firebase 專案設定區域 (Custom Firebase Project Config)
+    // 取消下方註解並填入您從 Firebase Console 取得的金鑰即可連接至您的專案：
+    // =========================================================================
+    const customFirebaseConfig = {
+      apiKey: window.VERCEL_ENV_VARS?.FIREBASE_API_KEY,
+      authDomain: window.VERCEL_ENV_VARS?.FIREBASE_AUTH_DOMAIN,
+      projectId: window.VERCEL_ENV_VARS?.FIREBASE_PROJECT_ID,
+      storageBucket: window.VERCEL_ENV_VARS?.FIREBASE_STORAGE_BUCKET,
+      messagingSenderId: window.VERCEL_ENV_VARS?.FIREBASE_MESSAGING_SENDER_ID,
+      appId: window.VERCEL_ENV_VARS?.FIREBASE_APP_ID
+    };
+
+    // 優先使用您填寫的 customFirebaseConfig；若未填寫則自動讀取系統內建環境變數
+    const firebaseConfig = (customFirebaseConfig && customFirebaseConfig.apiKey) 
+      ? customFirebaseConfig 
+      : (typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null);
+
+    const appId = (customFirebaseConfig && customFirebaseConfig.projectId)
+      ? customFirebaseConfig.projectId
+      : (typeof __app_id !== 'undefined' ? __app_id : 'mgps-qc-tracker-app');
+
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+    if (firebaseConfig) {
+      try {
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Standardized Public Collection Path as per environment rules
+        const getPublicCollection = () => collection(db, 'artifacts', appId, 'public', 'data', 'tu_items');
+        const getPublicDoc = (docId) => doc(db, 'artifacts', appId, 'public', 'data', 'tu_items', docId);
+
+        window.initFirebaseDB = async (onDataUpdate, onError) => {
+          try {
+            if (initialAuthToken) {
+              await signInWithCustomToken(auth, initialAuthToken);
+            } else {
+              await signInAnonymously(auth);
+            }
+
+            const unsubscribe = onSnapshot(getPublicCollection(), (snapshot) => {
+              const items = [];
+              snapshot.forEach((doc) => {
+                items.push({ id: doc.id, ...doc.data() });
+              });
+              onDataUpdate(items);
+            }, (error) => {
+              console.error("Firestore Snapshot Listener Error:", error);
+              if (onError) onError(error);
+            });
+
+            return { unsubscribe, db, auth };
+          } catch (err) {
+            console.error("Firebase Auth / Connection Error:", err);
+            if (onError) onError(err);
+            return null;
+          }
+        };
+
+        window.FirebaseOps = {
+          saveItem: async (item) => {
+            if (!auth.currentUser) return;
+            const ref = getPublicDoc(item.id);
+            await setDoc(ref, item, { merge: true });
+          },
+          updateItem: async (id, fields) => {
+            if (!auth.currentUser) return;
+            const ref = getPublicDoc(id);
+            await updateDoc(ref, { ...fields, updatedAt: new Date().toISOString() });
+          },
+          deleteItem: async (id) => {
+            if (!auth.currentUser) return;
+            const ref = getPublicDoc(id);
+            await deleteDoc(ref);
+          },
+          // Chunked batch write (max 200 items per chunk) to avoid Firestore limits
+          saveBatch: async (items) => {
+            if (!auth.currentUser || !items.length) return;
+            const CHUNK_SIZE = 200;
+            for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+              const chunk = items.slice(i, i + CHUNK_SIZE);
+              const batch = writeBatch(db);
+              chunk.forEach(item => {
+                const ref = getPublicDoc(item.id);
+                batch.set(ref, item, { merge: true });
+              });
+              await batch.commit();
+            }
+          },
+          updateBatchStatus: async (ids, newStatus) => {
+            if (!auth.currentUser || !ids.length) return;
+            const CHUNK_SIZE = 200;
+            for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+              const chunk = ids.slice(i, i + CHUNK_SIZE);
+              const batch = writeBatch(db);
+              chunk.forEach(id => {
+                const ref = getPublicDoc(id);
+                batch.update(ref, { status: newStatus, updatedAt: new Date().toISOString() });
+              });
+              await batch.commit();
+            }
+          },
+          clearAll: async (items) => {
+            if (!auth.currentUser || !items.length) return;
+            const CHUNK_SIZE = 200;
+            for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+              const chunk = items.slice(i, i + CHUNK_SIZE);
+              const batch = writeBatch(db);
+              chunk.forEach(item => {
+                const ref = getPublicDoc(item.id);
+                batch.delete(ref);
+              });
+              await batch.commit();
+            }
+          }
+        };
+      } catch (e) {
+        console.warn("Firebase initialization failed:", e);
+      }
+    }
+  </script>
+
+  <!-- React Application Core -->
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // React Error Boundary to prevent blank page crashes
+    class ErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+      }
+      componentDidCatch(error, errorInfo) {
+        console.error("Uncaught UI Error:", error, errorInfo);
+      }
+      render() {
+        if (this.state.hasError) {
+          return (
+            <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center p-6">
+              <div className="max-w-md w-full bg-slate-800 border border-slate-700 rounded-2xl p-6 text-center space-y-4 shadow-2xl">
+                <div className="w-12 h-12 bg-rose-500/20 text-rose-400 rounded-full flex items-center justify-center mx-auto">
+                  <i data-lucide="alert-triangle" className="w-6 h-6"></i>
+                </div>
+                <h2 className="text-lg font-bold">系統發生渲染錯誤</h2>
+                <p className="text-xs text-slate-400 break-words">{this.state.error?.toString()}</p>
+                <button
+                  onClick={() => {
+                    try { localStorage.removeItem("mgps_qc_data_v5"); } catch(e){}
+                    window.location.reload();
+                  }}
+                  className="w-full bg-sky-600 hover:bg-sky-500 text-white py-2 rounded-xl text-xs font-semibold transition"
+                >
+                  重設快取並重新載入
+                </button>
+              </div>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
+    // Gas Type Visual Styling Mapping
+    const GAS_CONFIG = {
+      OXY: { name: "氧氣 (O2)", bg: "bg-emerald-600", text: "text-emerald-700", badge: "bg-emerald-100 text-emerald-800 border-emerald-300" },
+      VAC: { name: "負壓吸引 (VAC)", bg: "bg-amber-500", text: "text-amber-700", badge: "bg-amber-100 text-amber-900 border-amber-300" },
+      MA4: { name: "醫療空氣 (MA4)", bg: "bg-sky-600", text: "text-sky-700", badge: "bg-sky-100 text-sky-800 border-sky-300" },
+      SA7: { name: "器械空氣 (SA7)", bg: "bg-indigo-600", text: "text-indigo-700", badge: "bg-indigo-100 text-indigo-800 border-indigo-300" },
+      N2O: { name: "笑氣 (N2O)", bg: "bg-blue-600", text: "text-blue-700", badge: "bg-blue-100 text-blue-800 border-blue-300" },
+      CO2: { name: "二氧化碳 (CO2)", bg: "bg-slate-600", text: "text-slate-700", badge: "bg-slate-100 text-slate-800 border-slate-300" }
+    };
+
+    // Safe fallback accessor for Gas Config
+    const getGasConfig = (gasType) => {
+      const code = String(gasType || "").toUpperCase();
+      return GAS_CONFIG[code] || {
+        name: gasType || "其他氣體",
+        bg: "bg-slate-600",
+        text: "text-slate-700",
+        badge: "bg-slate-100 text-slate-800 border-slate-300"
+      };
+    };
+
+    // Status definitions & helper styling mapping
+    const STATUS_MAP = {
+      Pending: { label: "未開始", bg: "bg-slate-100", text: "text-slate-700", border: "border-slate-300", badgeBg: "bg-slate-100 text-slate-700" },
+      "In Progress": { label: "檢驗中", bg: "bg-amber-50", text: "text-amber-800", border: "border-amber-300", badgeBg: "bg-amber-100 text-amber-800" },
+      Completed: { label: "已合格完成", bg: "bg-emerald-50", text: "text-emerald-800", border: "border-emerald-300", badgeBg: "bg-emerald-100 text-emerald-800" },
+      Defect: { label: "有缺失/需跟進", bg: "bg-rose-50", text: "text-rose-800", border: "border-rose-300", badgeBg: "bg-rose-100 text-rose-800" }
+    };
+
+    const getStatusConfig = (status) => {
+      return STATUS_MAP[status] || STATUS_MAP.Pending;
+    };
+
+    // Safe Sanitizer for Data Records
+    const sanitizeItem = (item) => {
+      if (!item || typeof item !== 'object') return null;
+      return {
+        id: String(item.id || `TU-${Date.now()}-${Math.random().toString(36).substr(2, 7)}`),
+        fileName: String(item.fileName || ''),
+        floor: String(item.floor || ''),
+        supply: String(item.supply || ''),
+        gasType: String(item.gasType || 'OXY').toUpperCase(),
+        soaItem: String(item.soaItem || ''),
+        facility: String(item.facility || ''),
+        tuNo: String(item.tuNo || ''),
+        nistNo: String(item.nistNo || ''),
+        lineValveNo: String(item.lineValveNo || ''),
+        status: STATUS_MAP[item.status] ? item.status : 'Pending',
+        remark: String(item.remark || ''),
+        updatedAt: String(item.updatedAt || new Date().toISOString())
+      };
+    };
+
+    // Clean & Normalize AVSU Supply Zone ID
+    const cleanSupplyZone = (supply = "", tuNo = "") => {
+      const tuStr = String(tuNo || "").trim();
+      const supplyStr = String(supply || "").trim();
+
+      const tuAvsuMatch = tuStr.match(/([A-Z0-9/]+F\/)?(AVSU[\s_/-]*\d+[A-Z]?)/i);
+      if (tuAvsuMatch) {
+        const prefix = tuAvsuMatch[1] ? tuAvsuMatch[1] : "";
+        const avsuPart = tuAvsuMatch[2].replace(/[\s_/-]+/g, " ").toUpperCase();
+        return `${prefix}${avsuPart}`.trim();
+      }
+
+      let str = supplyStr || tuStr;
+      if (!str) return "未分類 AVSU 閥箱";
+
+      if (str.match(/\/TU\//i)) {
+        str = str.split(/\/TU\//i)[0];
+      }
+
+      str = str.replace(/\/(OXY|VAC|MA4|SA7|N2O|CO2|ΟΧΥ)\//gi, "/");
+      str = str.replace(/\/+/g, "/").replace(/\/$/, "");
+
+      const match = str.match(/([A-Z0-9/]+F\/)?(AVSU[\s_/-]*\d+[A-Z]?)/i);
+      if (match) {
+        const prefix = match[1] ? match[1] : "";
+        const avsuPart = match[2].replace(/[\s_/-]+/g, " ").toUpperCase();
+        return `${prefix}${avsuPart}`.trim();
+      }
+
+      return str.trim() || "未分類 AVSU 閥箱";
+    };
+
+    // Extract Tower/Block Identifier (e.g. T4, T5, Block D)
+    const extractTower = (supply = "", tuNo = "", floor = "") => {
+      const combined = `${String(tuNo || '')} ${String(supply || '')} ${String(floor || '')}`;
+      const match = combined.match(/\b(T\d+|Tower\s*\d+|Block\s*[A-Z0-9]+)\b/i);
+      if (match) {
+        let res = match[1].toUpperCase().replace(/\s+/, " ");
+        if (res.startsWith("TOWER")) res = res.replace("TOWER", "T");
+        return res;
+      }
+      return "其他 / 未指定大樓";
+    };
+
+    function App() {
+      // Main dataset state loaded from LocalStorage or empty array
+      const [data, setData] = useState(() => {
+        try {
+          const saved = localStorage.getItem("mgps_qc_data_v5");
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            return Array.isArray(parsed) ? parsed.map(sanitizeItem).filter(Boolean) : [];
+          }
+        } catch(e) {
+          console.error("Localstorage parse error:", e);
+        }
+        return [];
+      });
+
+      const [isCloudConnected, setIsCloudConnected] = useState(false);
+      const [isSyncing, setIsSyncing] = useState(true);
+
+      // UI Navigation & Control States
+      const [activeTab, setActiveTab] = useState("dashboard"); // 'dashboard' | 'table' | 'upload'
+      const [dashboardGroupBy, setDashboardGroupBy] = useState("supply"); 
+      const [dashboardSort, setDashboardSort] = useState("total_desc"); 
+      const [searchQuery, setSearchQuery] = useState("");
+      
+      // Multi-Select Filters
+      const [filterGas, setFilterGas] = useState([]); 
+      const [filterStatus, setFilterStatus] = useState([]); 
+      const [filterSupply, setFilterSupply] = useState([]); 
+      const [filterTower, setFilterTower] = useState([]); 
+      const [openFilterMenu, setOpenFilterMenu] = useState(null); 
+
+      const [groupBy, setGroupBy] = useState("supply"); 
+      const [sortBy, setSortBy] = useState("tuNo"); 
+      const [selectedIds, setSelectedIds] = useState([]);
+      const [isParsing, setIsParsing] = useState(false);
+      const [parseLogs, setParseLogs] = useState([]);
+      const [notification, setNotification] = useState(null);
+      const [showAddModal, setShowAddModal] = useState(false);
+      const [editingItem, setEditingItem] = useState(null);
+
+      // Form state for manual creation
+      const [newTuForm, setNewTuForm] = useState({
+        floor: "Block D (ONCO) - 7/F",
+        supply: "T5/7F/AVSU 701",
+        gasType: "OXY",
+        soaItem: "1.11.1.01",
+        facility: "6-Bed Room",
+        tuNo: "",
+        status: "Pending",
+        remark: ""
+      });
+
+      // Persistent Storage Effect with error protection
+      useEffect(() => {
+        try {
+          localStorage.setItem("mgps_qc_data_v5", JSON.stringify(data));
+        } catch(e) {
+          console.warn("Could not save to localStorage:", e);
+        }
+      }, [data]);
+
+      // Auto-correct misclassified CO2 records from PDF imports
+      useEffect(() => {
+        if (!data.length) return;
+        let modified = false;
+        const corrected = data.map(item => {
+          if (!item) return item;
+          const tuUpper = String(item.tuNo || "").toUpperCase();
+          const supplyUpper = String(item.supply || "").toUpperCase();
+          if ((tuUpper.includes("/CO2/") || supplyUpper.includes("/CO2/") || supplyUpper.includes("CO2")) && item.gasType !== "CO2") {
+            modified = true;
+            const updated = { ...item, gasType: "CO2", updatedAt: new Date().toISOString() };
+            if (window.FirebaseOps?.updateItem) {
+              window.FirebaseOps.updateItem(item.id, { gasType: "CO2" });
+            }
+            return updated;
+          }
+          return item;
+        });
+        if (modified) {
+          setData(corrected);
+        }
+      }, [data]);
+
+      // Firebase Firestore subscription effect
+      useEffect(() => {
+        let unsub = null;
+
+        if (window.initFirebaseDB) {
+          window.initFirebaseDB(
+            (cloudData) => {
+              const sanitizedCloud = (cloudData || []).map(sanitizeItem).filter(Boolean);
+              setData(sanitizedCloud);
+              setIsCloudConnected(true);
+              setIsSyncing(false);
+            },
+            (err) => {
+              console.warn("Falling back to local storage due to cloud sync issue:", err);
+              setIsCloudConnected(false);
+              setIsSyncing(false);
+            }
+          ).then(res => {
+            if (res && res.unsubscribe) {
+              unsub = res.unsubscribe;
+            } else {
+              setIsSyncing(false);
+            }
+          });
+        } else {
+          setIsSyncing(false);
+        }
+
+        return () => {
+          if (unsub) unsub();
+        };
+      }, []);
+
+      // Re-initialize Lucide Icons on view updates
+      useEffect(() => {
+        if (window.lucide) {
+          try { window.lucide.createIcons(); } catch(e){}
+        }
+      });
+
+      const showToast = (msg, type = "info") => {
+        setNotification({ msg, type });
+        setTimeout(() => setNotification(null), 3500);
+      };
+
+      const toggleMultiFilter = (currentArr, setFn, item) => {
+        if (currentArr.includes(item)) {
+          setFn(currentArr.filter(i => i !== item));
+        } else {
+          setFn([...currentArr, item]);
+        }
+      };
+
+      const filteredData = useMemo(() => {
+        return data.filter(item => {
+          if (!item) return false;
+          const tuNo = String(item.tuNo || "");
+          const facility = String(item.facility || "");
+          const remark = String(item.remark || "");
+          const cleanSupply = cleanSupplyZone(item.supply, tuNo);
+          const tower = extractTower(item.supply, tuNo, item.floor);
+          const query = searchQuery.toLowerCase().trim();
+
+          const matchSearch = query === "" || 
+            tuNo.toLowerCase().includes(query) ||
+            facility.toLowerCase().includes(query) ||
+            cleanSupply.toLowerCase().includes(query) ||
+            tower.toLowerCase().includes(query) ||
+            remark.toLowerCase().includes(query);
+
+          const matchGas = filterGas.length === 0 || filterGas.includes(item.gasType);
+          const matchStatus = filterStatus.length === 0 || filterStatus.includes(item.status);
+          const matchSupply = filterSupply.length === 0 || filterSupply.includes(cleanSupply);
+          const matchTower = filterTower.length === 0 || filterTower.includes(tower);
+
+          return matchSearch && matchGas && matchStatus && matchSupply && matchTower;
+        }).sort((a, b) => {
+          if (sortBy === "tuNo") return String(a.tuNo || "").localeCompare(String(b.tuNo || ""), undefined, { numeric: true });
+          if (sortBy === "supply") return cleanSupplyZone(a.supply, a.tuNo).localeCompare(cleanSupplyZone(b.supply, b.tuNo));
+          if (sortBy === "facility") return String(a.facility || "").localeCompare(String(b.facility || ""));
+          if (sortBy === "status") return String(a.status || "").localeCompare(String(b.status || ""));
+          return 0;
+        });
+      }, [data, searchQuery, filterGas, filterStatus, filterSupply, filterTower, sortBy]);
+
+      const groupedData = useMemo(() => {
+        if (groupBy === "none") {
+          return { "所有檢測點位 (無分組)": filteredData };
+        }
+
+        const groups = {};
+        filteredData.forEach(item => {
+          let key = "未分類";
+          if (groupBy === "supply") key = cleanSupplyZone(item.supply, item.tuNo);
+          else if (groupBy === "tower") key = `大樓/座: ${extractTower(item.supply, item.tuNo, item.floor)}`;
+          else if (groupBy === "gasType") key = `氣體種類: ${getGasConfig(item.gasType).name}`;
+          else if (groupBy === "facility") key = item.facility || "其他設施區域";
+          else if (groupBy === "status") key = `狀態: ${getStatusConfig(item.status).label}`;
+
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(item);
+        });
+        return groups;
+      }, [filteredData, groupBy]);
+
+      const uniqueSupplies = useMemo(() => {
+        const set = new Set();
+        data.forEach(d => {
+          if (!d) return;
+          const zone = cleanSupplyZone(d.supply, d.tuNo);
+          if (zone) set.add(zone);
+        });
+        return Array.from(set).sort();
+      }, [data]);
+
+      const uniqueTowers = useMemo(() => {
+        const set = new Set();
+        data.forEach(d => {
+          if (!d) return;
+          const tw = extractTower(d.supply, d.tuNo, d.floor);
+          if (tw) set.add(tw);
+        });
+        return Array.from(set).sort();
+      }, [data]);
+
+      const stats = useMemo(() => {
+        const total = filteredData.length;
+        const completed = filteredData.filter(d => d.status === "Completed").length;
+        const inProgress = filteredData.filter(d => d.status === "In Progress").length;
+        const defect = filteredData.filter(d => d.status === "Defect").length;
+        const pending = filteredData.filter(d => d.status === "Pending").length;
+        const rate = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        return { total, completed, inProgress, defect, pending, rate };
+      }, [filteredData]);
+
+      const groupingAnalysis = useMemo(() => {
+        if (filteredData.length === 0) return { groups: [], topGroup: null, defectGroup: null, avgPassRate: 0, totalGroups: 0 };
+
+        const groupsMap = {};
+
+        filteredData.forEach(item => {
+          let key = "未分類";
+          if (dashboardGroupBy === "supply") key = cleanSupplyZone(item.supply, item.tuNo);
+          else if (dashboardGroupBy === "tower") key = extractTower(item.supply, item.tuNo, item.floor);
+          else if (dashboardGroupBy === "gasType") key = getGasConfig(item.gasType).name;
+          else if (dashboardGroupBy === "facility") key = item.facility || "其他設施區域";
+          else if (dashboardGroupBy === "status") key = getStatusConfig(item.status).label;
+
+          if (!groupsMap[key]) {
+            groupsMap[key] = {
+              name: key,
+              rawKey: item[dashboardGroupBy] || key,
+              items: [],
+              total: 0,
+              completed: 0,
+              inProgress: 0,
+              defect: 0,
+              pending: 0,
+              gases: new Set(),
+              defectsList: []
+            };
+          }
+
+          const g = groupsMap[key];
+          g.items.push(item);
+          g.total += 1;
+          if (item.status === "Completed") g.completed += 1;
+          else if (item.status === "In Progress") g.inProgress += 1;
+          else if (item.status === "Defect") {
+            g.defect += 1;
+            g.defectsList.push(item);
+          } else g.pending += 1;
+
+          if (item.gasType) g.gases.add(item.gasType);
+        });
+
+        let groupsList = Object.values(groupsMap).map(g => ({
+          ...g,
+          passRate: g.total > 0 ? Math.round((g.completed / g.total) * 100) : 0,
+          defectRate: g.total > 0 ? Math.round((g.defect / g.total) * 100) : 0
+        }));
+
+        groupsList.sort((a, b) => {
+          if (dashboardSort === "total_desc") return b.total - a.total;
+          if (dashboardSort === "total_asc") return a.total - b.total;
+          if (dashboardSort === "passRate_desc") return b.passRate - a.passRate;
+          if (dashboardSort === "passRate_asc") return a.passRate - b.passRate;
+          if (dashboardSort === "defect_desc") return b.defect - a.defect;
+          if (dashboardSort === "name_asc") return String(a.name || '').localeCompare(String(b.name || ''), "zh-Hant");
+          return b.total - a.total;
+        });
+
+        const topGroup = [...groupsList].sort((a, b) => b.passRate - a.passRate)[0] || null;
+        const defectGroup = [...groupsList].sort((a, b) => b.defect - a.defect)[0] || null;
+        const avgPassRate = Math.round(groupsList.reduce((acc, curr) => acc + curr.passRate, 0) / (groupsList.length || 1));
+
+        return {
+          groups: groupsList,
+          topGroup,
+          defectGroup,
+          avgPassRate,
+          totalGroups: groupsList.length
+        };
+      }, [filteredData, dashboardGroupBy, dashboardSort]);
+
+      // Handlers
+      const handleStatusChange = async (id, newStatus) => {
+        setData(prev => prev.map(item => item.id === id ? sanitizeItem({ ...item, status: newStatus, updatedAt: new Date().toISOString() }) : item));
+        if (window.FirebaseOps?.updateItem) {
+          try {
+            await window.FirebaseOps.updateItem(id, { status: newStatus });
+          } catch (e) { console.error("Cloud status update failed:", e); }
+        }
+      };
+
+      const handleRemarkChange = async (id, newRemark) => {
+        setData(prev => prev.map(item => item.id === id ? sanitizeItem({ ...item, remark: newRemark, updatedAt: new Date().toISOString() }) : item));
+        if (window.FirebaseOps?.updateItem) {
+          try {
+            await window.FirebaseOps.updateItem(id, { remark: newRemark });
+          } catch (e) { console.error("Cloud remark update failed:", e); }
+        }
+      };
+
+      const handleBatchStatus = async (newStatus) => {
+        if (selectedIds.length === 0) return;
+        const targetIds = [...selectedIds];
+        setData(prev => prev.map(item => targetIds.includes(item.id) ? sanitizeItem({ ...item, status: newStatus, updatedAt: new Date().toISOString() }) : item));
+        if (window.FirebaseOps?.updateBatchStatus) {
+          try {
+            await window.FirebaseOps.updateBatchStatus(targetIds, newStatus);
+          } catch (e) { console.error("Cloud batch update failed:", e); }
+        }
+        showToast(`已批量更新 ${targetIds.length} 個點位狀態為「${getStatusConfig(newStatus).label}」`, "success");
+        setSelectedIds([]);
+      };
+
+      const handleSelectAllInGroup = (groupItems, isChecked) => {
+        const groupIds = groupItems.map(i => i.id);
+        if (isChecked) {
+          setSelectedIds(prev => Array.from(new Set([...prev, ...groupIds])));
+        } else {
+          setSelectedIds(prev => prev.filter(id => !groupIds.includes(id)));
+        }
+      };
+
+      const handleDeleteItem = async (id) => {
+        setData(prev => prev.filter(item => item.id !== id));
+        if (window.FirebaseOps?.deleteItem) {
+          try {
+            await window.FirebaseOps.deleteItem(id);
+          } catch (e) { console.error("Cloud delete failed:", e); }
+        }
+        showToast("已刪除點位項目", "info");
+      };
+
+      const handleAddTuSubmit = async (e) => {
+        e.preventDefault();
+        if (!newTuForm.tuNo.trim()) {
+          showToast("請輸入 Terminal Unit (TU) 編號", "error");
+          return;
+        }
+
+        const newItem = sanitizeItem({
+          id: `MANUAL-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          fileName: "手動新增 (Manual Entry)",
+          ...newTuForm,
+          updatedAt: new Date().toISOString()
+        });
+
+        setData(prev => [newItem, ...prev]);
+        if (window.FirebaseOps?.saveItem) {
+          try {
+            await window.FirebaseOps.saveItem(newItem);
+          } catch (e) { console.error("Cloud add failed:", e); }
+        }
+        setShowAddModal(false);
+        setNewTuForm(prev => ({ ...prev, tuNo: "" }));
+        showToast(`成功新增點位 ${newItem.tuNo}`, "success");
+      };
+
+      const handleSaveEditItem = async (e) => {
+        e.preventDefault();
+        if (!editingItem || !editingItem.tuNo.trim()) return;
+
+        const updated = sanitizeItem({ ...editingItem, updatedAt: new Date().toISOString() });
+        setData(prev => prev.map(item => item.id === editingItem.id ? updated : item));
+        if (window.FirebaseOps?.saveItem) {
+          try {
+            await window.FirebaseOps.saveItem(updated);
+          } catch (e) { console.error("Cloud update failed:", e); }
+        }
+        setEditingItem(null);
+        showToast(`已更新點位 ${editingItem.tuNo}`, "success");
+      };
+
+      // Robust PDF Upload Handler with Safe Sanitization & Parsing Error Guard
+      const handleFileUpload = async (e) => {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
+
+        setIsParsing(true);
+        setParseLogs(["[系統] 開始解析上傳的 PDF 檔案..."]);
+
+        const newParsedItems = [];
+
+        for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+          const file = files[fileIndex];
+          setParseLogs(prev => [...prev, `[讀取] 正解析檔案 ${fileIndex + 1}/${files.length}: ${file.name}`]);
+
+          try {
+            if (typeof pdfjsLib === 'undefined') {
+              throw new Error("PDF.js 函式庫未成功載入，請確認網路連線。");
+            }
+
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+            let currentFloor = "Block D (ONCO) - 7/F";
+            let activeSupply = "";
+            let activeGas = "";
+
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+              const page = await pdf.getPage(pageNum);
+              const textContent = await page.getTextContent();
+
+              const textItems = textContent.items.map(item => String(item?.str || '').trim()).filter(Boolean);
+              const fullText = textItems.join(" ");
+
+              const floorMatch = fullText.match(/Floor:\s*([^\n|]+)/i);
+              if (floorMatch) {
+                currentFloor = floorMatch[1].trim();
+              }
+
+              for (let i = 0; i < textItems.length; i++) {
+                const itemStr = textItems[i];
+
+                if (itemStr.includes("AVSU") || itemStr.match(/T\d+\/\d+F\/AVSU/i)) {
+                  activeSupply = itemStr;
+                  if (itemStr.includes("OXY") || itemStr.includes("ΟΧΥ")) activeGas = "OXY";
+                  else if (itemStr.includes("VAC")) activeGas = "VAC";
+                  else if (itemStr.includes("MA4")) activeGas = "MA4";
+                  else if (itemStr.includes("SA7")) activeGas = "SA7";
+                  else if (itemStr.includes("N2O")) activeGas = "N2O";
+                  else if (itemStr.includes("CO2")) activeGas = "CO2";
+                }
+
+                const isTuLine = itemStr.match(/TU\/(OXY|VAC|MA4|SA7|N2O|CO2|ΟΧΥ)\/\d+/i) || itemStr.includes("/TU/");
+
+                if (isTuLine) {
+                  const tuNo = itemStr.replace("ΟΧΥ", "OXY").replace(/^TS\//, "T5/");
+                  
+                  let itemGas = activeGas;
+                  if (tuNo.includes("/OXY/")) itemGas = "OXY";
+                  else if (tuNo.includes("/VAC/")) itemGas = "VAC";
+                  else if (tuNo.includes("/MA4/")) itemGas = "MA4";
+                  else if (tuNo.includes("/SA7/")) itemGas = "SA7";
+                  else if (tuNo.includes("/N2O/")) itemGas = "N2O";
+                  else if (tuNo.includes("/CO2/")) itemGas = "CO2";
+
+                  let facility = "6-Bed Room";
+                  let soaItem = "";
+
+                  for (let offset = -4; offset <= 4; offset++) {
+                    const ctx = textItems[i + offset] || "";
+                    if (typeof ctx === 'string' && ctx.match(/\d+\.\d+\.\d+/)) soaItem = ctx;
+                    if (typeof ctx === 'string' && (ctx.includes("Bed") || ctx.includes("Room") || ctx.includes("Area") || ctx.includes("Isolation") || ctx.includes("Ward"))) {
+                      facility = ctx;
+                    }
+                  }
+
+                  const derivedSupply = cleanSupplyZone(activeSupply, tuNo);
+
+                  const parsedRaw = {
+                    id: `TU-PDF-${Date.now()}-${fileIndex}-${i}-${Math.random().toString(36).substr(2, 7)}`,
+                    fileName: file.name || "Uploaded PDF",
+                    floor: currentFloor || "Block D (ONCO) - 7/F",
+                    supply: derivedSupply || "未分類 AVSU 閥箱",
+                    gasType: itemGas || "OXY",
+                    soaItem: soaItem || "1.11.1.01",
+                    facility: facility || "6-Bed Room",
+                    tuNo: tuNo,
+                    nistNo: "",
+                    lineValveNo: "",
+                    status: "Pending",
+                    remark: "",
+                    updatedAt: new Date().toISOString()
+                  };
+
+                  const sanitized = sanitizeItem(parsedRaw);
+                  if (sanitized) newParsedItems.push(sanitized);
+                }
+              }
+            }
+          } catch (err) {
+            console.error("Parse Error:", err);
+            setParseLogs(prev => [...prev, `[錯誤] 解析檔案 ${file.name} 失敗: ${err.message}`]);
+          }
+        }
+
+        if (newParsedItems.length > 0) {
+          const existingTuSet = new Set(data.map(p => p.tuNo));
+          const freshItems = newParsedItems.filter(item => !existingTuSet.has(item.tuNo));
+          
+          if (freshItems.length > 0) {
+            setData(prev => [...prev, ...freshItems]);
+            if (window.FirebaseOps?.saveBatch) {
+              try {
+                await window.FirebaseOps.saveBatch(freshItems);
+              } catch (e) { console.error("Cloud batch save failed:", e); }
+            }
+            setParseLogs(prev => [...prev, `[雲端同步] 成功將 ${freshItems.length} 個新 TU 點位同步至 Firebase 雲端資料庫！`]);
+            showToast(`成功匯入並同步 ${freshItems.length} 個 TU 點位`, "success");
+          } else {
+            setParseLogs(prev => [...prev, `[提示] 匯入的所有 TU 編號皆已存在，未新增重複項目。`]);
+          }
+          setActiveTab("table");
+        } else {
+          setParseLogs(prev => [...prev, `[提示] 未在 PDF 中發現符合格式之 TU 編號。`]);
+        }
+
+        setIsParsing(false);
+      };
+
+      const handleResetData = async () => {
+        const itemsToDelete = [...data];
+        setData([]);
+        try { localStorage.removeItem("mgps_qc_data_v5"); } catch(e){}
+        if (window.FirebaseOps?.clearAll) {
+          try {
+            await window.FirebaseOps.clearAll(itemsToDelete);
+          } catch (e) { console.error("Cloud clear failed:", e); }
+        }
+        showToast("已清空所有點位資料（含雲端資料庫）", "info");
+      };
+
+      const handleExportCSV = () => {
+        const headers = ["Floor/Location", "Supply AVSU Zone", "Gas Type", "SoA Item Code", "Facility Description", "Terminal Unit (TU) No.", "QC Status", "QC Remark / Defect Notes", "Source PDF File", "Last Updated"];
+        const rows = data.map(d => [
+          `"${d.floor || ''}"`,
+          `"${cleanSupplyZone(d.supply, d.tuNo)}"`,
+          `"${d.gasType || ''}"`,
+          `"${d.soaItem || ''}"`,
+          `"${d.facility || ''}"`,
+          `"${d.tuNo || ''}"`,
+          `"${getStatusConfig(d.status).label}"`,
+          `"${(d.remark || '').replace(/"/g, '""')}"`,
+          `"${d.fileName || ''}"`,
+          `"${d.updatedAt ? new Date(d.updatedAt).toLocaleString('zh-HK') : ''}"`
+        ]);
+
+        const csvContent = "\uFEFF" + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `MGPS_TU_QC_Report_${new Date().toISOString().slice(0,10)}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        showToast("已匯出 Excel/CSV QC 進度報告", "success");
+      };
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          
+          {/* Toast Notification */}
+          {notification && (
+            <div className={`fixed bottom-5 right-5 z-50 px-4 py-3 rounded-xl shadow-xl text-xs font-semibold text-white flex items-center space-x-2 animate-fadeIn ${
+              notification.type === 'success' ? 'bg-emerald-600' :
+              notification.type === 'error' ? 'bg-rose-600' : 'bg-slate-800'
+            }`}>
+              <i data-lucide={notification.type === 'success' ? 'check-circle' : 'info'} className="w-4 h-4"></i>
+              <span>{notification.msg}</span>
+            </div>
+          )}
+
+          {/* Header Bar */}
+          <header className="bg-slate-900 text-white shadow-lg sticky top-0 z-30">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+              <div className="flex items-center justify-between h-16">
+                
+                {/* Title & Brand */}
+                <div className="flex items-center space-x-3">
+                  <div className="bg-gradient-to-tr from-sky-500 to-indigo-600 p-2 rounded-xl text-white font-bold shadow-md">
+                    <i data-lucide="activity" className="w-6 h-6"></i>
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <h1 className="font-bold text-base sm:text-lg leading-snug tracking-wide">MGPS 醫療氣體終端組件 (TU) 檢測系統</h1>
+                      {isSyncing ? (
+                        <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] px-2 py-0.5 rounded-full flex items-center space-x-1">
+                          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-ping"></span>
+                          <span>同步中...</span>
+                        </span>
+                      ) : isCloudConnected ? (
+                        <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] px-2 py-0.5 rounded-full flex items-center space-x-1">
+                          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full"></span>
+                          <span>雲端實時同步</span>
+                        </span>
+                      ) : (
+                        <span className="bg-slate-700 text-slate-300 border border-slate-600 text-[10px] px-2 py-0.5 rounded-full">
+                          本機數據模式
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-400">Medical Gas Pipeline System QC Inspection Tracker & Analytics</p>
+                  </div>
+                </div>
+
+                {/* Toolbar Buttons */}
+                <div className="flex items-center space-x-2 sm:space-x-3">
+                  <button 
+                    onClick={() => setShowAddModal(true)}
+                    className="hidden sm:flex items-center space-x-1.5 bg-sky-600 hover:bg-sky-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium shadow-xs transition"
+                  >
+                    <i data-lucide="plus-circle" className="w-4 h-4"></i>
+                    <span>新增點位</span>
+                  </button>
+
+                  <button 
+                    onClick={handleExportCSV}
+                    className="flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-700 transition"
+                    title="匯出完整 QC 報告成 CSV"
+                  >
+                    <i data-lucide="download" className="w-4 h-4"></i>
+                    <span className="hidden sm:inline">匯出 Excel/CSV</span>
+                  </button>
+
+                  <button 
+                    onClick={handleResetData}
+                    className="flex items-center space-x-1.5 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 px-3 py-1.5 rounded-lg text-xs font-medium border border-rose-800/50 transition"
+                    title="重設所有測試數據"
+                  >
+                    <i data-lucide="rotate-ccw" className="w-4 h-4"></i>
+                    <span className="hidden sm:inline">重設</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Navigation Tabs */}
+              <div className="flex space-x-2 border-t border-slate-800 pt-2 pb-0 overflow-x-auto custom-scrollbar">
+                <button
+                  onClick={() => setActiveTab("dashboard")}
+                  className={`flex items-center space-x-2 px-4 py-2.5 text-xs font-medium border-b-2 transition ${
+                    activeTab === "dashboard"
+                      ? "border-sky-400 text-sky-400 bg-slate-800/60 rounded-t-lg"
+                      : "border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <i data-lucide="pie-chart" className="w-4 h-4"></i>
+                  <span>進度分析 Dashboard</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("table")}
+                  className={`flex items-center space-x-2 px-4 py-2.5 text-xs font-medium border-b-2 transition ${
+                    activeTab === "table"
+                      ? "border-sky-400 text-sky-400 bg-slate-800/60 rounded-t-lg"
+                      : "border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <i data-lucide="list-checks" className="w-4 h-4"></i>
+                  <span>終端組件清單與 QC 紀錄</span>
+                  <span className="bg-sky-950 text-sky-300 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-sky-800">
+                    {filteredData.length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("upload")}
+                  className={`flex items-center space-x-2 px-4 py-2.5 text-xs font-medium border-b-2 transition ${
+                    activeTab === "upload"
+                      ? "border-sky-400 text-sky-400 bg-slate-800/60 rounded-t-lg"
+                      : "border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <i data-lucide="file-up" className="w-4 h-4"></i>
+                  <span>匯入多份 PDF 檔案</span>
+                </button>
+              </div>
+            </div>
+          </header>
+
+          {/* Main Body */}
+          <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
+
+            {/* Overall KPI Overview Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+              
+              {/* Total TUs */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
+                <span className="text-xs font-medium text-slate-500">總 TU 測試點位</span>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-2xl font-bold text-slate-800">{stats.total}</span>
+                  <span className="text-xs text-slate-400">個點</span>
+                </div>
+              </div>
+
+              {/* Completed */}
+              <div className="bg-white p-4 rounded-xl border border-emerald-200 shadow-xs flex flex-col justify-between bg-emerald-50/20">
+                <div className="flex items-center justify-between text-emerald-700">
+                  <span className="text-xs font-semibold">合格完成</span>
+                  <i data-lucide="check-circle-2" className="w-4 h-4"></i>
+                </div>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-2xl font-bold text-emerald-700">{stats.completed}</span>
+                  <span className="text-xs font-semibold text-emerald-600">{stats.total ? Math.round((stats.completed/stats.total)*100) : 0}%</span>
+                </div>
+              </div>
+
+              {/* In Progress */}
+              <div className="bg-white p-4 rounded-xl border border-amber-200 shadow-xs flex flex-col justify-between bg-amber-50/20">
+                <div className="flex items-center justify-between text-amber-700">
+                  <span className="text-xs font-semibold">測試進行中</span>
+                  <i data-lucide="clock" className="w-4 h-4"></i>
+                </div>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-2xl font-bold text-amber-700">{stats.inProgress}</span>
+                  <span className="text-xs text-amber-600">個</span>
+                </div>
+              </div>
+
+              {/* Defects */}
+              <div className="bg-white p-4 rounded-xl border border-rose-200 shadow-xs flex flex-col justify-between bg-rose-50/20">
+                <div className="flex items-center justify-between text-rose-700">
+                  <span className="text-xs font-semibold">缺失待跟進</span>
+                  <i data-lucide="alert-triangle" className="w-4 h-4"></i>
+                </div>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-2xl font-bold text-rose-700">{stats.defect}</span>
+                  <span className="text-xs text-rose-600">缺失</span>
+                </div>
+              </div>
+
+              {/* Pending */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
+                <span className="text-xs font-medium text-slate-500">未測試點位</span>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-2xl font-bold text-slate-600">{stats.pending}</span>
+                  <span className="text-xs text-slate-400">剩餘</span>
+                </div>
+              </div>
+
+              {/* Overall Gauge */}
+              <div className="bg-gradient-to-br from-sky-600 to-indigo-700 text-white p-4 rounded-xl shadow-md flex flex-col justify-between">
+                <span className="text-xs font-medium text-sky-100">整體合格進度</span>
+                <div className="mt-2">
+                  <div className="flex justify-between items-baseline">
+                    <span className="text-2xl font-extrabold">{stats.rate}%</span>
+                    <span className="text-[10px] text-sky-200">{stats.completed}/{stats.total}</span>
+                  </div>
+                  <div className="w-full bg-sky-900/50 rounded-full h-2 mt-2 overflow-hidden">
+                    <div className="bg-white h-2 rounded-full transition-all duration-500" style={{ width: `${stats.rate}%` }}></div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {activeTab === "dashboard" && (
+              <div className="space-y-6">
+
+                {/* Grouping Analysis Control Panel */}
+                <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-5 space-y-4">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    
+                    <div>
+                      <h2 className="font-bold text-slate-800 text-base flex items-center space-x-2">
+                        <i data-lucide="layout-grid" className="w-5 h-5 text-sky-600"></i>
+                        <span>進度統計分析 (Progress Breakdown Analytics)</span>
+                      </h2>
+                      <p className="text-xs text-slate-500 mt-0.5">自訂分析維度與排序方式以找出進度落後或缺失集中的區域</p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3">
+                      
+                      {/* Grouping Dimension Switcher */}
+                      <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl text-xs font-medium border border-slate-200">
+                        <button
+                          onClick={() => setDashboardGroupBy("supply")}
+                          className={`px-3 py-1.5 rounded-lg transition ${dashboardGroupBy === "supply" ? "bg-white text-sky-700 shadow-xs font-semibold" : "text-slate-600 hover:text-slate-900"}`}
+                        >
+                          依 AVSU 閥箱
+                        </button>
+                        <button
+                          onClick={() => setDashboardGroupBy("tower")}
+                          className={`px-3 py-1.5 rounded-lg transition ${dashboardGroupBy === "tower" ? "bg-white text-sky-700 shadow-xs font-semibold" : "text-slate-600 hover:text-slate-900"}`}
+                        >
+                          依大樓/座 (Tower)
+                        </button>
+                        <button
+                          onClick={() => setDashboardGroupBy("gasType")}
+                          className={`px-3 py-1.5 rounded-lg transition ${dashboardGroupBy === "gasType" ? "bg-white text-sky-700 shadow-xs font-semibold" : "text-slate-600 hover:text-slate-900"}`}
+                        >
+                          依氣體種類
+                        </button>
+                        <button
+                          onClick={() => setDashboardGroupBy("facility")}
+                          className={`px-3 py-1.5 rounded-lg transition ${dashboardGroupBy === "facility" ? "bg-white text-sky-700 shadow-xs font-semibold" : "text-slate-600 hover:text-slate-900"}`}
+                        >
+                          依設施/病房
+                        </button>
+                        <button
+                          onClick={() => setDashboardGroupBy("status")}
+                          className={`px-3 py-1.5 rounded-lg transition ${dashboardGroupBy === "status" ? "bg-white text-sky-700 shadow-xs font-semibold" : "text-slate-600 hover:text-slate-900"}`}
+                        >
+                          依 QC 狀態
+                        </button>
+                      </div>
+
+                      {/* Sorting Switcher */}
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs font-medium text-slate-500 whitespace-nowrap">排序:</span>
+                        <select
+                          value={dashboardSort}
+                          onChange={(e) => setDashboardSort(e.target.value)}
+                          className="bg-white border border-slate-300 rounded-lg text-xs px-2.5 py-1.5 focus:ring-2 focus:ring-sky-500 outline-none"
+                        >
+                          <option value="total_desc">點位數量 (多 → 少)</option>
+                          <option value="total_asc">點位數量 (少 → 多)</option>
+                          <option value="passRate_desc">合格率 (高 → 低)</option>
+                          <option value="passRate_asc">合格率 (低 → 高)</option>
+                          <option value="defect_desc">缺失數量 (多 → 少)</option>
+                          <option value="name_asc">區域名稱 (A - Z)</option>
+                        </select>
+                      </div>
+
+                    </div>
+
+                  </div>
+
+                  {/* High Level Analytical Insights Bar */}
+                  {groupingAnalysis.totalGroups > 0 && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t border-slate-100 text-xs">
+                      <div className="bg-sky-50/60 border border-sky-100 rounded-lg p-2.5 flex items-center justify-between">
+                        <span className="text-slate-600">分析群組總數: <strong className="text-sky-800">{groupingAnalysis.totalGroups} 個組</strong></span>
+                        <span className="text-slate-500">平均合格率: <strong className="text-sky-800">{groupingAnalysis.avgPassRate}%</strong></span>
+                      </div>
+                      
+                      <div className="bg-emerald-50/60 border border-emerald-100 rounded-lg p-2.5 flex items-center justify-between">
+                        <span className="text-slate-600">最佳進度群組:</span>
+                        <span className="font-semibold text-emerald-800 truncate max-w-[150px]">
+                          {groupingAnalysis.topGroup ? `${groupingAnalysis.topGroup.name} (${groupingAnalysis.topGroup.passRate}%)` : '無'}
+                        </span>
+                      </div>
+
+                      <div className="bg-rose-50/60 border border-rose-100 rounded-lg p-2.5 flex items-center justify-between">
+                        <span className="text-slate-600">缺失最多群組:</span>
+                        <span className="font-semibold text-rose-800 truncate max-w-[150px]">
+                          {groupingAnalysis.defectGroup && groupingAnalysis.defectGroup.defect > 0 
+                            ? `${groupingAnalysis.defectGroup.name} (${groupingAnalysis.defectGroup.defect} 缺失)` 
+                            : '目前無缺失'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Analysis Group Cards List */}
+                {groupingAnalysis.groups.length === 0 ? (
+                  <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-12 text-center space-y-3">
+                    <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto">
+                      <i data-lucide="database" className="w-6 h-6"></i>
+                    </div>
+                    <h3 className="font-semibold text-slate-700">尚未有任何測試資料</h3>
+                    <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                      您可以切換至「匯入多份 PDF 檔案」頁籤匯入現場圖紙清單，或是點擊上方「新增點位」按鈕。
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {groupingAnalysis.groups.map(group => (
+                      <div key={group.name} className="bg-white rounded-xl shadow-xs border border-slate-200 p-5 flex flex-col justify-between hover:border-sky-300 transition">
+                        <div>
+                          
+                          {/* Group Header */}
+                          <div className="flex items-start justify-between gap-2 mb-3">
+                            <div>
+                              <h3 className="font-bold text-slate-800 text-sm leading-snug">{group.name}</h3>
+                              <div className="flex flex-wrap items-center gap-1 mt-1">
+                                {Array.from(group.gases).map(g => {
+                                  const cfg = getGasConfig(g);
+                                  return (
+                                    <span key={g} className={`text-[10px] px-1.5 py-0.2 rounded border font-semibold ${cfg.badge}`}>
+                                      {g}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                            <span className="text-xs font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full border border-slate-200 shrink-0">
+                              {group.total} 個點
+                            </span>
+                          </div>
+
+                          {/* Progress Bar */}
+                          <div className="space-y-1 my-3">
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="text-slate-500 font-medium">合格完成率</span>
+                              <span className="font-bold text-emerald-700">{group.passRate}%</span>
+                            </div>
+                            <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden flex">
+                              <div className="bg-emerald-500 h-2" style={{ width: `${group.passRate}%` }}></div>
+                              <div className="bg-amber-400 h-2" style={{ width: `${group.total > 0 ? (group.inProgress / group.total) * 100 : 0}%` }}></div>
+                              <div className="bg-rose-500 h-2" style={{ width: `${group.total > 0 ? (group.defect / group.total) * 100 : 0}%` }}></div>
+                            </div>
+                          </div>
+
+                          {/* Status Counts Breakdown Grid */}
+                          <div className="grid grid-cols-4 gap-1.5 text-center my-3 text-[11px]">
+                            <div className="bg-emerald-50 text-emerald-800 p-1.5 rounded-lg border border-emerald-100">
+                              <div className="text-[10px] text-emerald-600">合格</div>
+                              <div className="font-bold text-xs">{group.completed}</div>
+                            </div>
+                            <div className="bg-amber-50 text-amber-800 p-1.5 rounded-lg border border-amber-100">
+                              <div className="text-[10px] text-amber-600">進行中</div>
+                              <div className="font-bold text-xs">{group.inProgress}</div>
+                            </div>
+                            <div className="bg-rose-50 text-rose-800 p-1.5 rounded-lg border border-rose-100">
+                              <div className="text-[10px] text-rose-600">缺失</div>
+                              <div className="font-bold text-xs">{group.defect}</div>
+                            </div>
+                            <div className="bg-slate-50 text-slate-700 p-1.5 rounded-lg border border-slate-200">
+                              <div className="text-[10px] text-slate-500">未開始</div>
+                              <div className="font-bold text-xs">{group.pending}</div>
+                            </div>
+                          </div>
+
+                          {/* Defect Preview Section */}
+                          {group.defectsList.length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-rose-100 bg-rose-50/40 p-2.5 rounded-lg">
+                              <div className="text-[11px] font-bold text-rose-800 flex items-center space-x-1 mb-1">
+                                <i data-lucide="alert-circle" className="w-3.5 h-3.5"></i>
+                                <span>缺失跟進事項 ({group.defectsList.length}):</span>
+                              </div>
+                              <ul className="space-y-1">
+                                {group.defectsList.slice(0, 2).map((def, idx) => (
+                                  <li key={idx} className="text-[10px] text-rose-700 flex justify-between truncate">
+                                    <span className="font-mono font-semibold">{def.tuNo}:</span>
+                                    <span className="truncate ml-1">{def.remark || "未備註缺失細節"}</span>
+                                  </li>
+                                ))}
+                                {group.defectsList.length > 2 && (
+                                  <li className="text-[10px] text-rose-500 italic text-right">
+                                    等共 {group.defectsList.length} 處缺失...
+                                  </li>
+                                )}
+                              </ul>
+                            </div>
+                          )}
+
+                        </div>
+
+                        {/* Quick View Button */}
+                        <div className="mt-4 pt-3 border-t border-slate-100">
+                          <button
+                            onClick={() => {
+                              setSearchQuery(group.name === "未分類" ? "" : group.name);
+                              setActiveTab("table");
+                            }}
+                            className="w-full py-1.5 bg-slate-50 hover:bg-sky-50 text-sky-700 hover:text-sky-800 rounded-lg text-xs font-semibold transition border border-slate-200 hover:border-sky-200 flex items-center justify-center space-x-1"
+                          >
+                            <span>查看詳細點位清單</span>
+                            <i data-lucide="arrow-right" className="w-3.5 h-3.5"></i>
+                          </button>
+                        </div>
+
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+              </div>
+            )}
+
+            {activeTab === "table" && (
+              <div className="space-y-4">
+                
+                {/* Search, Filter & Multi-Select Toolbar */}
+                <div className="bg-white p-4 rounded-xl shadow-xs border border-slate-200 space-y-3">
+                  
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                    
+                    {/* Search Input Box */}
+                    <div className="relative flex-1">
+                      <i data-lucide="search" className="w-4 h-4 absolute left-3 top-3 text-slate-400"></i>
+                      <input
+                        type="text"
+                        placeholder="搜尋 TU 編號、AVSU 閥箱、病房/設施或缺失備註..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-full pl-9 pr-8 py-2 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none"
+                      />
+                      {searchQuery && (
+                        <button 
+                          onClick={() => setSearchQuery("")}
+                          className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                        >
+                          <i data-lucide="x" className="w-4 h-4"></i>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Grouping & Sorting Controls */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center space-x-1.5 bg-slate-50 p-1 rounded-lg border border-slate-200">
+                        <span className="text-[11px] font-medium text-slate-500 px-1">分組:</span>
+                        <select
+                          value={groupBy}
+                          onChange={(e) => setGroupBy(e.target.value)}
+                          className="bg-white border border-slate-300 rounded-md text-xs px-2 py-1 outline-none font-medium"
+                        >
+                          <option value="supply">依 AVSU 閥箱</option>
+                          <option value="tower">依大樓/座 (Tower)</option>
+                          <option value="gasType">依氣體種類</option>
+                          <option value="facility">依設施/病房</option>
+                          <option value="status">依 QC 狀態</option>
+                          <option value="none">無分組</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-center space-x-1.5 bg-slate-50 p-1 rounded-lg border border-slate-200">
+                        <span className="text-[11px] font-medium text-slate-500 px-1">排序:</span>
+                        <select
+                          value={sortBy}
+                          onChange={(e) => setSortBy(e.target.value)}
+                          className="bg-white border border-slate-300 rounded-md text-xs px-2 py-1 outline-none font-medium"
+                        >
+                          <option value="tuNo">TU 編號</option>
+                          <option value="supply">AVSU 閥箱</option>
+                          <option value="facility">設施名稱</option>
+                          <option value="status">QC 狀態</option>
+                        </select>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* Multi-Selection Filters Bar */}
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100 text-xs">
+                    
+                    <span className="text-slate-500 font-semibold text-[11px]">多重篩選:</span>
+
+                    {/* Gas Filter Multi-Select Dropdown */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setOpenFilterMenu(openFilterMenu === 'gas' ? null : 'gas')}
+                        className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-xs font-medium transition ${
+                          filterGas.length > 0 ? "bg-sky-50 border-sky-300 text-sky-700" : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span>氣體種類 {filterGas.length > 0 && `(${filterGas.length})`}</span>
+                        <i data-lucide="chevron-down" className="w-3.5 h-3.5"></i>
+                      </button>
+
+                      {openFilterMenu === 'gas' && (
+                        <div className="absolute left-0 mt-1 w-48 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-40 space-y-1 animate-fadeIn">
+                          <div className="flex justify-between items-center px-2 py-1 border-b border-slate-100 text-[11px]">
+                            <span className="font-bold text-slate-600">氣體種類</span>
+                            <button onClick={() => setFilterGas([])} className="text-sky-600 hover:underline">清除</button>
+                          </div>
+                          {Object.keys(GAS_CONFIG).map(gKey => {
+                            const cfg = getGasConfig(gKey);
+                            const isChecked = filterGas.includes(gKey);
+                            return (
+                              <label key={gKey} className="flex items-center space-x-2 px-2 py-1 hover:bg-slate-50 rounded cursor-pointer text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleMultiFilter(filterGas, setFilterGas, gKey)}
+                                  className="rounded text-sky-600 focus:ring-sky-500"
+                                />
+                                <span className={cfg.text}>{cfg.name}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Status Filter Multi-Select Dropdown */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setOpenFilterMenu(openFilterMenu === 'status' ? null : 'status')}
+                        className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-xs font-medium transition ${
+                          filterStatus.length > 0 ? "bg-sky-50 border-sky-300 text-sky-700" : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span>QC 狀態 {filterStatus.length > 0 && `(${filterStatus.length})`}</span>
+                        <i data-lucide="chevron-down" className="w-3.5 h-3.5"></i>
+                      </button>
+
+                      {openFilterMenu === 'status' && (
+                        <div className="absolute left-0 mt-1 w-48 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-40 space-y-1 animate-fadeIn">
+                          <div className="flex justify-between items-center px-2 py-1 border-b border-slate-100 text-[11px]">
+                            <span className="font-bold text-slate-600">QC 狀態</span>
+                            <button onClick={() => setFilterStatus([])} className="text-sky-600 hover:underline">清除</button>
+                          </div>
+                          {Object.keys(STATUS_MAP).map(sKey => {
+                            const cfg = getStatusConfig(sKey);
+                            const isChecked = filterStatus.includes(sKey);
+                            return (
+                              <label key={sKey} className="flex items-center space-x-2 px-2 py-1 hover:bg-slate-50 rounded cursor-pointer text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleMultiFilter(filterStatus, setFilterStatus, sKey)}
+                                  className="rounded text-sky-600 focus:ring-sky-500"
+                                />
+                                <span className={cfg.text}>{cfg.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* AVSU Zone Filter Multi-Select Dropdown */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setOpenFilterMenu(openFilterMenu === 'supply' ? null : 'supply')}
+                        className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-xs font-medium transition ${
+                          filterSupply.length > 0 ? "bg-sky-50 border-sky-300 text-sky-700" : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span>AVSU 閥箱 {filterSupply.length > 0 && `(${filterSupply.length})`}</span>
+                        <i data-lucide="chevron-down" className="w-3.5 h-3.5"></i>
+                      </button>
+
+                      {openFilterMenu === 'supply' && (
+                        <div className="absolute left-0 mt-1 w-60 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-40 space-y-1 max-h-60 overflow-y-auto custom-scrollbar animate-fadeIn">
+                          <div className="flex justify-between items-center px-2 py-1 border-b border-slate-100 text-[11px]">
+                            <span className="font-bold text-slate-600">AVSU 閥箱</span>
+                            <button onClick={() => setFilterSupply([])} className="text-sky-600 hover:underline">清除</button>
+                          </div>
+                          {uniqueSupplies.map(sup => {
+                            const isChecked = filterSupply.includes(sup);
+                            return (
+                              <label key={sup} className="flex items-center space-x-2 px-2 py-1 hover:bg-slate-50 rounded cursor-pointer text-xs truncate">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleMultiFilter(filterSupply, setFilterSupply, sup)}
+                                  className="rounded text-sky-600 focus:ring-sky-500"
+                                />
+                                <span className="truncate">{sup}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Tower Filter Multi-Select Dropdown */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setOpenFilterMenu(openFilterMenu === 'tower' ? null : 'tower')}
+                        className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-xs font-medium transition ${
+                          filterTower.length > 0 ? "bg-sky-50 border-sky-300 text-sky-700" : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span>大樓/座 {filterTower.length > 0 && `(${filterTower.length})`}</span>
+                        <i data-lucide="chevron-down" className="w-3.5 h-3.5"></i>
+                      </button>
+
+                      {openFilterMenu === 'tower' && (
+                        <div className="absolute left-0 mt-1 w-52 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-40 space-y-1 animate-fadeIn">
+                          <div className="flex justify-between items-center px-2 py-1 border-b border-slate-100 text-[11px]">
+                            <span className="font-bold text-slate-600">大樓/座 (Tower)</span>
+                            <button onClick={() => setFilterTower([])} className="text-sky-600 hover:underline">清除</button>
+                          </div>
+                          {uniqueTowers.map(tw => {
+                            const isChecked = filterTower.includes(tw);
+                            return (
+                              <label key={tw} className="flex items-center space-x-2 px-2 py-1 hover:bg-slate-50 rounded cursor-pointer text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleMultiFilter(filterTower, setFilterTower, tw)}
+                                  className="rounded text-sky-600 focus:ring-sky-500"
+                                />
+                                <span>{tw}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Active Filter Badges */}
+                    {(filterGas.length > 0 || filterStatus.length > 0 || filterSupply.length > 0 || filterTower.length > 0) && (
+                      <button
+                        onClick={() => {
+                          setFilterGas([]);
+                          setFilterStatus([]);
+                          setFilterSupply([]);
+                          setFilterTower([]);
+                        }}
+                        className="text-rose-600 hover:underline text-[11px] ml-auto font-medium"
+                      >
+                        重設所有篩選條件
+                      </button>
+                    )}
+
+                  </div>
+
+                  {/* Batch Actions Bar */}
+                  {selectedIds.length > 0 && (
+                    <div className="bg-sky-900 text-white p-3 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 animate-fadeIn">
+                      <span className="text-xs font-semibold">
+                        已勾選 <u className="no-underline text-sky-300 font-bold px-1">{selectedIds.length}</u> 個點位，進行批量操作:
+                      </span>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <button
+                          onClick={() => handleBatchStatus("Completed")}
+                          className="bg-emerald-600 hover:bg-emerald-500 px-3 py-1 rounded-lg font-medium transition"
+                        >
+                          設為「合格完成」
+                        </button>
+                        <button
+                          onClick={() => handleBatchStatus("In Progress")}
+                          className="bg-amber-600 hover:bg-amber-500 px-3 py-1 rounded-lg font-medium transition"
+                        >
+                          設為「檢驗中」
+                        </button>
+                        <button
+                          onClick={() => handleBatchStatus("Defect")}
+                          className="bg-rose-600 hover:bg-rose-500 px-3 py-1 rounded-lg font-medium transition"
+                        >
+                          設為「有缺失」
+                        </button>
+                        <button
+                          onClick={() => setSelectedIds([])}
+                          className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-2.5 py-1 rounded-lg transition"
+                        >
+                          取消選擇
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+
+                {/* Grouped TUs List Section */}
+                {Object.keys(groupedData).length === 0 || filteredData.length === 0 ? (
+                  <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-12 text-center space-y-3">
+                    <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto">
+                      <i data-lucide="search-x" className="w-6 h-6"></i>
+                    </div>
+                    <h3 className="font-semibold text-slate-700">未找到符合條件的點位</h3>
+                    <p className="text-xs text-slate-400">請嘗試調整搜尋關鍵字或清除篩選條件。</p>
+                  </div>
+                ) : (
+                  Object.entries(groupedData).map(([groupTitle, groupItems]) => {
+                    const groupCompleted = groupItems.filter(i => i.status === "Completed").length;
+                    const groupRate = Math.round((groupCompleted / groupItems.length) * 100);
+                    const allInGroupSelected = groupItems.every(i => selectedIds.includes(i.id));
+
+                    return (
+                      <div key={groupTitle} className="bg-white rounded-xl shadow-xs border border-slate-200 overflow-hidden">
+                        
+                        {/* Group Title Bar */}
+                        <div className="bg-slate-100/80 border-b border-slate-200 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="flex items-center space-x-3">
+                            <input
+                              type="checkbox"
+                              checked={allInGroupSelected && groupItems.length > 0}
+                              onChange={(e) => handleSelectAllInGroup(groupItems, e.target.checked)}
+                              className="rounded text-sky-600 focus:ring-sky-500"
+                            />
+                            <span className="font-bold text-slate-800 text-sm">{groupTitle}</span>
+                            <span className="text-xs bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full font-semibold">
+                              {groupItems.length} 個點位
+                            </span>
+                          </div>
+
+                          <div className="flex items-center space-x-3">
+                            <div className="text-xs text-slate-500 font-medium">
+                              合格率: <strong className="text-emerald-700 font-bold">{groupRate}%</strong> ({groupCompleted}/{groupItems.length})
+                            </div>
+                            <div className="w-24 bg-slate-200 rounded-full h-2 overflow-hidden">
+                              <div className="bg-emerald-500 h-2" style={{ width: `${groupRate}%` }}></div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* TUs Table */}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs border-collapse">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
+                                <th className="p-3 w-8 text-center">選取</th>
+                                <th className="p-3">TU 編號 (Terminal Unit)</th>
+                                <th className="p-3">氣體種類</th>
+                                <th className="p-3">AVSU 閥箱區域</th>
+                                <th className="p-3">設施 / 病房 Description</th>
+                                <th className="p-3">SoA 編號</th>
+                                <th className="p-3">QC 狀態</th>
+                                <th className="p-3">缺失備註 / 檢驗紀錄</th>
+                                <th className="p-3 text-right">操作</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {groupItems.map(item => {
+                                const gasCfg = getGasConfig(item.gasType);
+                                const statusCfg = getStatusConfig(item.status);
+                                const isChecked = selectedIds.includes(item.id);
+
+                                return (
+                                  <tr key={item.id} className={`hover:bg-slate-50 transition ${isChecked ? "bg-sky-50/50" : ""}`}>
+                                    
+                                    {/* Selection Checkbox */}
+                                    <td className="p-3 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={(e) => {
+                                          if (e.target.checked) setSelectedIds(prev => [...prev, item.id]);
+                                          else setSelectedIds(prev => prev.filter(id => id !== item.id));
+                                        }}
+                                        className="rounded text-sky-600 focus:ring-sky-500"
+                                      />
+                                    </td>
+
+                                    {/* TU No. */}
+                                    <td className="p-3 font-mono font-bold text-slate-900 whitespace-nowrap">
+                                      {item.tuNo}
+                                    </td>
+
+                                    {/* Gas Type Badge */}
+                                    <td className="p-3 whitespace-nowrap">
+                                      <span className={`inline-block px-2 py-0.5 rounded border text-[11px] font-semibold ${gasCfg.badge}`}>
+                                        {gasCfg.name}
+                                      </span>
+                                    </td>
+
+                                    {/* Supply AVSU */}
+                                    <td className="p-3 text-slate-600 whitespace-nowrap">
+                                      {cleanSupplyZone(item.supply, item.tuNo)}
+                                    </td>
+
+                                    {/* Facility Description */}
+                                    <td className="p-3 text-slate-700 font-medium">
+                                      {item.facility || "—"}
+                                    </td>
+
+                                    {/* SoA Item Code */}
+                                    <td className="p-3 font-mono text-slate-500 text-[11px]">
+                                      {item.soaItem || "—"}
+                                    </td>
+
+                                    {/* Status Selector */}
+                                    <td className="p-3 whitespace-nowrap">
+                                      <select
+                                        value={item.status}
+                                        onChange={(e) => handleStatusChange(item.id, e.target.value)}
+                                        className={`text-xs font-semibold px-2 py-1 rounded-lg border outline-none cursor-pointer ${statusCfg.badgeBg} ${statusCfg.border}`}
+                                      >
+                                        <option value="Pending">未開始</option>
+                                        <option value="In Progress">檢驗中</option>
+                                        <option value="Completed">已合格完成</option>
+                                        <option value="Defect">有缺失/需跟進</option>
+                                      </select>
+                                    </td>
+
+                                    {/* Remark Field */}
+                                    <td className="p-3">
+                                      <input
+                                        type="text"
+                                        placeholder="新增檢驗備註或缺失細節..."
+                                        value={item.remark || ""}
+                                        onChange={(e) => handleRemarkChange(item.id, e.target.value)}
+                                        className="w-full bg-transparent hover:bg-white focus:bg-white border border-transparent focus:border-slate-300 rounded px-2 py-1 text-xs outline-none transition"
+                                      />
+                                    </td>
+
+                                    {/* Edit & Delete Action Buttons */}
+                                    <td className="p-3 text-right whitespace-nowrap space-x-1">
+                                      <button
+                                        onClick={() => setEditingItem(item)}
+                                        className="p-1 text-slate-400 hover:text-sky-600 transition rounded hover:bg-slate-100"
+                                        title="編輯點位詳細資訊"
+                                      >
+                                        <i data-lucide="edit-3" className="w-4 h-4"></i>
+                                      </button>
+
+                                      <button
+                                        onClick={() => handleDeleteItem(item.id)}
+                                        className="p-1 text-slate-400 hover:text-rose-600 transition rounded hover:bg-slate-100"
+                                        title="刪除此點位"
+                                      >
+                                        <i data-lucide="trash-2" className="w-4 h-4"></i>
+                                      </button>
+                                    </td>
+
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                      </div>
+                    );
+                  })
+                )}
+
+              </div>
+            )}
+
+            {activeTab === "upload" && (
+              <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-6 space-y-6">
+                <div>
+                  <h2 className="font-bold text-slate-800 text-lg flex items-center space-x-2">
+                    <i data-lucide="file-up" className="w-5 h-5 text-sky-600"></i>
+                    <span>批量匯入圖紙 PDF 檔案 (Batch PDF Parser)</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">
+                    系統自動解析 PDF 文字層，提取 AVSU 控制箱編號、樓層、設施病房與所有 Terminal Unit (TU) 項目並即時同步至雲端。
+                  </p>
+                </div>
+
+                {/* File Dropzone */}
+                <div className="border-2 border-dashed border-slate-300 hover:border-sky-500 rounded-2xl p-8 text-center transition bg-slate-50/50 hover:bg-sky-50/30">
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    multiple
+                    onChange={handleFileUpload}
+                    className="hidden"
+                    id="pdf-upload-input"
+                    disabled={isParsing}
+                  />
+                  <label htmlFor="pdf-upload-input" className="cursor-pointer space-y-3 block">
+                    <div className="w-14 h-14 bg-sky-100 text-sky-600 rounded-2xl flex items-center justify-center mx-auto">
+                      <i data-lucide="upload-cloud" className="w-8 h-8"></i>
+                    </div>
+                    <div>
+                      <span className="text-sm font-bold text-sky-700">點擊選擇多份 PDF 檔案</span>
+                      <span className="text-xs text-slate-500 block mt-1">或直接拖曳 PDF 檔案至此處</span>
+                    </div>
+                    <span className="inline-block bg-white text-slate-500 border border-slate-200 px-3 py-1 rounded-lg text-xs font-medium">
+                      支援多檔同時解析 (NAH Gas Outlet Number Lists)
+                    </span>
+                  </label>
+                </div>
+
+                {/* Parsing Status & Log Console */}
+                {parseLogs.length > 0 && (
+                  <div className="bg-slate-900 text-slate-200 p-4 rounded-xl space-y-2 text-xs font-mono">
+                    <div className="flex items-center justify-between text-slate-400 border-b border-slate-800 pb-2">
+                      <span>解析控制台輸出 (Console Logs)</span>
+                      {isParsing && <span className="text-sky-400 animate-pulse">處理中...</span>}
+                    </div>
+                    <div className="max-h-48 overflow-y-auto custom-scrollbar space-y-1">
+                      {parseLogs.map((log, idx) => (
+                        <div key={idx} className={log.includes("錯誤") ? "text-rose-400" : log.includes("成功") || log.includes("雲端同步") ? "text-emerald-400 font-bold" : "text-slate-300"}>
+                          {log}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+          </main>
+
+          {/* Add Item Modal */}
+          {showAddModal && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4 animate-fadeIn">
+                <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                  <h3 className="font-bold text-slate-800 text-base">新增檢測點位 (Add New TU)</h3>
+                  <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-600">
+                    <i data-lucide="x" className="w-5 h-5"></i>
+                  </button>
+                </div>
+
+                <form onSubmit={handleAddTuSubmit} className="space-y-3 text-xs">
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">Terminal Unit (TU) 編號 *</label>
+                    <input
+                      type="text"
+                      placeholder="例: T5/7F/AVSU701/TU/OXY/01"
+                      value={newTuForm.tuNo}
+                      onChange={(e) => setNewTuForm({ ...newTuForm, tuNo: e.target.value })}
+                      className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500 font-mono"
+                      required
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">氣體種類</label>
+                      <select
+                        value={newTuForm.gasType}
+                        onChange={(e) => setNewTuForm({ ...newTuForm, gasType: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500"
+                      >
+                        {Object.keys(GAS_CONFIG).map(gKey => (
+                          <option key={gKey} value={gKey}>{GAS_CONFIG[gKey].name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">AVSU 閥箱名稱</label>
+                      <input
+                        type="text"
+                        value={newTuForm.supply}
+                        onChange={(e) => setNewTuForm({ ...newTuForm, supply: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">設施 / 病房描述</label>
+                      <input
+                        type="text"
+                        value={newTuForm.facility}
+                        onChange={(e) => setNewTuForm({ ...newTuForm, facility: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">SoA 項目代碼</label>
+                      <input
+                        type="text"
+                        value={newTuForm.soaItem}
+                        onChange={(e) => setNewTuForm({ ...newTuForm, soaItem: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">檢驗狀態</label>
+                    <select
+                      value={newTuForm.status}
+                      onChange={(e) => setNewTuForm({ ...newTuForm, status: e.target.value })}
+                      className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                      <option value="Pending">未開始</option>
+                      <option value="In Progress">檢驗中</option>
+                      <option value="Completed">已合格完成</option>
+                      <option value="Defect">有缺失/需跟進</option>
+                    </select>
+                  </div>
+
+                  <div className="flex justify-end space-x-2 pt-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddModal(false)}
+                      className="px-4 py-2 border border-slate-300 text-slate-600 rounded-xl hover:bg-slate-50 font-semibold"
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl font-semibold shadow-xs"
+                    >
+                      確認新增
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Edit Record Modal */}
+          {editingItem && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4 animate-fadeIn">
+                <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                  <h3 className="font-bold text-slate-800 text-base">編輯點位 (Edit TU Record)</h3>
+                  <button onClick={() => setEditingItem(null)} className="text-slate-400 hover:text-slate-600">
+                    <i data-lucide="x" className="w-5 h-5"></i>
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveEditItem} className="space-y-3 text-xs">
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">Terminal Unit (TU) 編號 *</label>
+                    <input
+                      type="text"
+                      value={editingItem.tuNo}
+                      onChange={(e) => setEditingItem({ ...editingItem, tuNo: e.target.value })}
+                      className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500 font-mono"
+                      required
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">氣體種類</label>
+                      <select
+                        value={editingItem.gasType}
+                        onChange={(e) => setEditingItem({ ...editingItem, gasType: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500"
+                      >
+                        {Object.keys(GAS_CONFIG).map(gKey => (
+                          <option key={gKey} value={gKey}>{GAS_CONFIG[gKey].name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-slate-700 block mb-1">AVSU 閥箱名稱</label>
+                      <input
+                        type="text"
+                        value={editingItem.supply}
+                        onChange={(e) => setEditingItem({ ...editingItem, supply: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">設施 / 病房描述</label>
+                    <input
+                      type="text"
+                      value={editingItem.facility}
+                      onChange={(e) => setEditingItem({ ...editingItem, facility: e.target.value })}
+                      className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-semibold text-slate-700 block mb-1">檢驗備註 / 缺失細節</label>
+                    <textarea
+                      rows="2"
+                      value={editingItem.remark || ""}
+                      onChange={(e) => setEditingItem({ ...editingItem, remark: e.target.value })}
+                      className="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-sky-500"
+                      placeholder="請輸入缺失說明或量測數據..."
+                    ></textarea>
+                  </div>
+
+                  <div className="flex justify-end space-x-2 pt-3">
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem(null)}
+                      className="px-4 py-2 border border-slate-300 text-slate-600 rounded-xl hover:bg-slate-50 font-semibold"
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl font-semibold shadow-xs"
+                    >
+                      儲存更新
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+        </div>
+      );
+    }
+
+    // Render React Application wrapped in ErrorBoundary
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    );
+  </script>
+</body>
+</html>
