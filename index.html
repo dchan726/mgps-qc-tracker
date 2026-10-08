@@ -1270,7 +1270,46 @@
                         <div className="mt-4 pt-3 border-t border-slate-100">
                           <button
                             onClick={() => {
-                              setSearchQuery(group.name === "未分類" ? "" : group.name);
+                              // Reset filters and apply dynamic targeted filter based on active group dimension
+                              if (dashboardGroupBy === "supply") {
+                                setFilterSupply([group.name]);
+                                setFilterTower([]);
+                                setFilterGas([]);
+                                setFilterStatus([]);
+                                setSearchQuery("");
+                                setGroupBy("supply");
+                              } else if (dashboardGroupBy === "tower") {
+                                setFilterTower([group.name]);
+                                setFilterSupply([]);
+                                setFilterGas([]);
+                                setFilterStatus([]);
+                                setSearchQuery("");
+                                setGroupBy("tower");
+                              } else if (dashboardGroupBy === "gasType") {
+                                setFilterGas(Array.from(group.gases));
+                                setFilterSupply([]);
+                                setFilterTower([]);
+                                setFilterStatus([]);
+                                setSearchQuery("");
+                                setGroupBy("gasType");
+                              } else if (dashboardGroupBy === "status") {
+                                const matchedStatus = Object.keys(STATUS_MAP).filter(k => STATUS_MAP[k].label === group.name);
+                                setFilterStatus(matchedStatus.length > 0 ? matchedStatus : []);
+                                setFilterSupply([]);
+                                setFilterTower([]);
+                                setFilterGas([]);
+                                setSearchQuery("");
+                                setGroupBy("status");
+                              } else if (dashboardGroupBy === "facility") {
+                                setSearchQuery(group.name === "未分類" ? "" : group.name);
+                                setFilterSupply([]);
+                                setFilterTower([]);
+                                setFilterGas([]);
+                                setFilterStatus([]);
+                                setGroupBy("facility");
+                              } else {
+                                setSearchQuery(group.name === "未分類" ? "" : group.name);
+                              }
                               setActiveTab("table");
                             }}
                             className="w-full py-1.5 bg-slate-50 hover:bg-sky-50 text-sky-700 hover:text-sky-800 rounded-lg text-xs font-semibold transition border border-slate-200 hover:border-sky-200 flex items-center justify-center space-x-1"
@@ -1527,6 +1566,12 @@
                       </span>
                       <div className="flex flex-wrap items-center gap-2 text-xs">
                         <button
+                          onClick={() => handleBatchStatus("Pending")}
+                          className="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded-lg font-medium transition"
+                        >
+                          設為「未開始」
+                        </button>
+                        <button
                           onClick={() => handleBatchStatus("Completed")}
                           className="bg-emerald-600 hover:bg-emerald-500 px-3 py-1 rounded-lg font-medium transition"
                         >
@@ -1546,7 +1591,7 @@
                         </button>
                         <button
                           onClick={() => setSelectedIds([])}
-                          className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-2.5 py-1 rounded-lg transition"
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg transition"
                         >
                           取消選擇
                         </button>
