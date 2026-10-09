@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Production build outputs
+dist/
+dist-ssr/
+build/
+out/
+
+# Environment and sensitive keys
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.*.local
+*.env
+*.env.*
+!.env.example
+
+# Credentials & Service Accounts
+*service-account*.json
+*serviceAccountKey*.json
+*credentials*.json
+firebase-applet-config.json
+
+# Firebase debug logs
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+
+# Vite and compiler caches
+.vite/
+.cache/
+*.tsbuildinfo
+
+# Logs & Debugging
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+[Tt]humbs.db
+ehthumbs.db

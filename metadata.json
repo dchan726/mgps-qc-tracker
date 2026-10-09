@@ -1,0 +1,8 @@
+{
+  "name": "MGPS 醫療氣體終端組件檢測與進度管理系統",
+  "description": "Medical Gas Pipeline System (MGPS) terminal unit inspection and QC progress tracking application.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
